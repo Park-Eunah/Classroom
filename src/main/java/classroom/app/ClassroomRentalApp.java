@@ -1,6 +1,7 @@
 package classroom.app;
 
 import classroom.data.RoomCatalog;
+import classroom.data.Database;
 import classroom.model.*;
 import classroom.service.*;
 import classroom.view.*;
@@ -29,16 +30,19 @@ public class ClassroomRentalApp {
     public static int nextId = 1;
 
     public static void main(String[] args) throws IOException {
-        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+        Database.initialize();
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
         server.createContext("/", ClassroomRentalApp::handle);
         server.setExecutor(Executors.newCachedThreadPool());
         server.start();
-        System.out.println("강의실 대여 앱이 http://localhost:8080 에서 실행 중입니다.");
+        System.out.println("강의실 대여 앱이 포트 " + port + "에서 실행 중입니다.");
     }
 
     private static void handle(HttpExchange exchange) throws IOException {
         try {
             String path = exchange.getRequestURI().getPath();
+            if (path.equals("/healthz")) { send(exchange, "ok"); return; }
             if (path.equals("/styles.css")) { sendCss(exchange); return; }
             if ("POST".equals(exchange.getRequestMethod())) {
                 Map<String, String> form = parseForm(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));

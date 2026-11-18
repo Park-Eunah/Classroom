@@ -2,6 +2,7 @@ package classroom.service;
 
 import classroom.app.ClassroomRentalApp;
 import classroom.data.RoomCatalog;
+import classroom.data.Database;
 import classroom.model.*;
 import java.time.LocalDate;
 import java.util.List;
@@ -46,8 +47,11 @@ public final class RentalService {
         boolean occupied = ClassroomRentalApp.APPLICATIONS.stream().anyMatch(a -> a.roomId == roomId && a.date.equals(date.toString())
                 && !a.status.equals("반려") && start.isBefore(a.end) && a.start.isBefore(end));
         if (occupied) throw new IllegalArgumentException("선택한 강의실과 시간에 다른 신청이 있습니다. 시간표를 다시 확인해 주세요.");
-        ClassroomRentalApp.APPLICATIONS.add(new Application(ClassroomRentalApp.nextId++, name, studentId, room.id, room.name,
-                date.toString(), start, end, purpose, details));
+        Application application = new Application(ClassroomRentalApp.nextId, name, studentId, room.id, room.name,
+                date.toString(), start, end, purpose, details);
+        Database.insertApplication(application);
+        ClassroomRentalApp.nextId++;
+        ClassroomRentalApp.APPLICATIONS.add(application);
     }
 
     public static synchronized void decide(String path, Map<String, String> form, String managerName) {
@@ -61,16 +65,17 @@ public final class RentalService {
         if (choice.equals("승인")) {
             Room room = ClassroomRentalApp.ROOMS.stream().filter(r -> r.id == app.roomId).findFirst().orElseThrow();
             if (ClassroomRentalApp.hasCourseConflict(room, LocalDate.parse(app.date), app.start, app.end)) {
-                app.status = "반려"; app.reason = "정규 수업 시간과 겹쳐 승인할 수 없습니다."; return;
+                app.status = "반려"; app.reason = "정규 수업 시간과 겹쳐 승인할 수 없습니다."; Database.updateApplication(app); return;
             }
             boolean conflict = ClassroomRentalApp.APPLICATIONS.stream().anyMatch(a -> a != app && a.roomId == app.roomId
                     && a.date.equals(app.date) && !a.status.equals("반려") && a.start.isBefore(app.end) && app.start.isBefore(a.end));
-            if (conflict) { app.status = "반려"; app.reason = "처리 중 동일 시간에 다른 신청이 승인되었습니다."; return; }
+            if (conflict) { app.status = "반려"; app.reason = "처리 중 동일 시간에 다른 신청이 승인되었습니다."; Database.updateApplication(app); return; }
             app.status = "승인";
         } else {
             app.status = "반려";
             app.reason = form.getOrDefault("reason", "관리자 검토 결과 반려되었습니다.").trim();
             if (app.reason.isEmpty()) app.reason = "관리자 검토 결과 반려되었습니다.";
         }
+        Database.updateApplication(app);
     }
 }

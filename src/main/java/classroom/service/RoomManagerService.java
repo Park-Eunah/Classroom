@@ -2,6 +2,7 @@ package classroom.service;
 
 import classroom.app.ClassroomRentalApp;
 import classroom.data.RoomCatalog;
+import classroom.data.Database;
 import classroom.model.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,7 +28,11 @@ public final class RoomManagerService {
             if (managers.stream().anyMatch(manager -> manager.name.equals(name))) throw new IllegalArgumentException(name + "은(는) 이미 이 강의실에 지정되어 있습니다.");
             selected.add(name);
         }
-        for (String name : selected) managers.add(new RoomManager(ClassroomRentalApp.nextRoomManagerId++, name));
+        List<RoomManager> added = new ArrayList<>();
+        for (String name : selected) added.add(new RoomManager(roomId, name, ClassroomRentalApp.nextRoomManagerId + added.size()));
+        Database.insertRoomManagers(added);
+        managers.addAll(added);
+        ClassroomRentalApp.nextRoomManagerId += added.size();
     }
 
     public static synchronized void remove(Map<String, String> form) {
@@ -36,8 +41,11 @@ public final class RoomManagerService {
         try { managerId = Integer.parseInt(ClassroomRentalApp.required(form, "managerId")); }
         catch (NumberFormatException e) { throw new IllegalArgumentException("삭제할 관리자 선택을 확인해 주세요."); }
         List<RoomManager> managers = ClassroomRentalApp.ROOM_MANAGERS.get(roomId);
-        if (managers == null || !managers.removeIf(manager -> manager.id == managerId))
+        RoomManager target = managers == null ? null : managers.stream().filter(manager -> manager.id == managerId).findFirst().orElse(null);
+        if (target == null)
             throw new IllegalArgumentException("해당 강의실에서 관리자를 찾을 수 없습니다.");
+        Database.deleteRoomManager(roomId, managerId);
+        managers.remove(target);
     }
 
     private static int roomId(Map<String, String> form) {
