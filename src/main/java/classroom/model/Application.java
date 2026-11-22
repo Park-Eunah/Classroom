@@ -14,8 +14,13 @@ public final class Application {
     public final String details;
     public final LocalTime start;
     public final LocalTime end;
-    public String status = "대기";
+    public volatile String status = "대기";
     public String reason = "";
+
+    public boolean blocksTimeSlot() {
+        String currentStatus = status;
+        return currentStatus.equals("대기") || currentStatus.equals("승인");
+    }
 
     public Application(int id, String name, String studentId, int roomId, String roomName, String date,
                 LocalTime start, LocalTime end, String purpose, String details) {

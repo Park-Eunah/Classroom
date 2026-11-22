@@ -8,7 +8,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
-/** 신청 입력 검사, 시간 충돌 확인, 승인·반려 처리를 담당합니다. */
+/** 신청 입력 검사, 시간 충돌 확인, 승인·반려·취소 처리를 담당합니다. */
 public final class RentalService {
     private RentalService() { }
 
@@ -43,15 +43,28 @@ public final class RentalService {
         String purpose = purposeType.equals("기타") ? ClassroomRentalApp.required(form, "otherPurpose") : purposeType;
         String details = ClassroomRentalApp.required(form, "details");
         if (ClassroomRentalApp.hasCourseConflict(room, date, start, end))
-            throw new IllegalArgumentException("선택한 시간에 정규 수업이 있는 강의실입니다. 다른 시간이나 강의실을 선택해 주세요.");
+            throw new IllegalArgumentException("선택한 시간에 정규 수업이 있습니다. 다른 날짜나 시간, 또는 다른 강의실을 선택해 주세요.");
         boolean occupied = ClassroomRentalApp.APPLICATIONS.stream().anyMatch(a -> a.roomId == roomId && a.date.equals(date.toString())
-                && !a.status.equals("반려") && start.isBefore(a.end) && a.start.isBefore(end));
-        if (occupied) throw new IllegalArgumentException("선택한 강의실과 시간에 다른 신청이 있습니다. 시간표를 다시 확인해 주세요.");
+                && a.blocksTimeSlot() && start.isBefore(a.end) && a.start.isBefore(end));
+        if (occupied) throw new IllegalArgumentException("선택한 강의실은 해당 시간에 이미 신청이 들어왔습니다. 다른 날짜나 시간, 또는 다른 강의실을 선택해 주세요.");
         Application application = new Application(ClassroomRentalApp.nextId, name, studentId, room.id, room.name,
                 date.toString(), start, end, purpose, details);
         Database.insertApplication(application);
         ClassroomRentalApp.nextId++;
         ClassroomRentalApp.APPLICATIONS.add(application);
+    }
+
+    public static synchronized boolean cancel(int id) {
+        Application app = ClassroomRentalApp.APPLICATIONS.stream().filter(a -> a.id == id).findFirst().orElse(null);
+        if (app == null || !app.status.equals("대기")) return false;
+        updateStatus(app, "취소", "");
+        return true;
+    }
+
+    public static synchronized Application findScheduledApplication(int id) {
+        return ClassroomRentalApp.APPLICATIONS.stream()
+                .filter(application -> application.id == id && application.blocksTimeSlot())
+                .findFirst().orElse(null);
     }
 
     public static synchronized void decide(String path, Map<String, String> form, String managerName) {
@@ -65,17 +78,25 @@ public final class RentalService {
         if (choice.equals("승인")) {
             Room room = ClassroomRentalApp.ROOMS.stream().filter(r -> r.id == app.roomId).findFirst().orElseThrow();
             if (ClassroomRentalApp.hasCourseConflict(room, LocalDate.parse(app.date), app.start, app.end)) {
-                app.status = "반려"; app.reason = "정규 수업 시간과 겹쳐 승인할 수 없습니다."; Database.updateApplication(app); return;
+                updateStatus(app, "반려", "정규 수업 시간과 겹쳐 승인할 수 없습니다.");
+                return;
             }
             boolean conflict = ClassroomRentalApp.APPLICATIONS.stream().anyMatch(a -> a != app && a.roomId == app.roomId
-                    && a.date.equals(app.date) && !a.status.equals("반려") && a.start.isBefore(app.end) && app.start.isBefore(a.end));
-            if (conflict) { app.status = "반려"; app.reason = "처리 중 동일 시간에 다른 신청이 승인되었습니다."; Database.updateApplication(app); return; }
-            app.status = "승인";
+                    && a.date.equals(app.date) && a.blocksTimeSlot() && a.start.isBefore(app.end) && app.start.isBefore(a.end));
+            if (conflict) {
+                updateStatus(app, "반려", "처리 중 동일 시간에 다른 신청이 승인되었습니다.");
+                return;
+            }
+            updateStatus(app, "승인", "");
         } else {
-            app.status = "반려";
-            app.reason = form.getOrDefault("reason", "관리자 검토 결과 반려되었습니다.").trim();
-            if (app.reason.isEmpty()) app.reason = "관리자 검토 결과 반려되었습니다.";
+            String reason = form.getOrDefault("reason", "").trim();
+            updateStatus(app, "반려", reason.isEmpty() ? "관리자 검토 결과 반려되었습니다." : reason);
         }
-        Database.updateApplication(app);
+    }
+
+    private static void updateStatus(Application app, String status, String reason) {
+        Database.updateApplication(app.id, status, reason);
+        app.reason = reason;
+        app.status = status;
     }
 }

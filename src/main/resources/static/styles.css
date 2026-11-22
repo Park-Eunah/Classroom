@@ -108,9 +108,63 @@ button.reject {
     gap:20px;
 }
 
+.rental-summary {
+    flex:1;
+    min-width:0;
+}
+
+.rental-heading {
+    margin:0 0 14px;
+    padding-bottom:12px;
+    border-bottom:1px solid #e1e6ed;
+    font-size:18px;
+}
+
+.rental-details {
+    display:grid;
+    grid-template-columns:max-content minmax(0,1fr);
+    gap:6px 16px;
+    margin:0;
+}
+
+.rental-details dt {
+    color:#526176;
+    font-weight:600;
+}
+
+.rental-details dd {
+    margin:0;
+    overflow-wrap:anywhere;
+}
+
+.rental-notes {
+    white-space:pre-wrap;
+}
+
 .status {
     font-weight:700;
     color: #2457a7;
+}
+
+.application-receipt {
+    padding:12px 16px;
+    border:1px solid #a9d7ba;
+    border-radius:8px;
+    background:#edf8f0;
+    color:#205739;
+}
+
+.application-error {
+    padding:12px 16px;
+    border:1px solid #d99da1;
+    border-radius:8px;
+    background:#fdf2f3;
+    color:#8f2530;
+}
+
+#submitApplication:disabled {
+    opacity:.5;
+    cursor:default;
 }
 
 .reason {
@@ -354,11 +408,43 @@ button.reject {
 }
 
 .manager-room-list {
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(min(100%,145px),1fr));
+    gap:8px;
+}
+
+.manager-room-form {
     margin-bottom: 20px;
 }
 
-.manager-room-add {
-    max-width: 460px;
+.manager-room-option {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin:0;
+    padding:10px 12px;
+    border:1px solid #e1e6ed;
+    border-radius:8px;
+    cursor:pointer;
+}
+
+.manager-room-option:has(input:checked) {
+    border-color:#2457a7;
+    background:#eef4ff;
+}
+
+.manager-room-option input {
+    width:auto;
+    margin:0;
+}
+
+.manager-room-form button {
+    width:auto;
+}
+
+.manager-room-form button:disabled {
+    opacity:.5;
+    cursor:default;
 }
 
 .manager-row {
@@ -380,6 +466,18 @@ button.reject {
 
 .manager-select-row {
     margin:10px 0;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    column-gap:8px;
+}
+
+.manager-select-row label {
+    grid-column:1 / -1;
+}
+
+.manager-select-row .remove-select {
+    width:auto;
+    margin:0;
 }
 
 .manager-add .add-select {

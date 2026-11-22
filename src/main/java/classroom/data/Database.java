@@ -134,12 +134,12 @@ public final class Database {
                 });
     }
 
-    public static void updateApplication(Application application) {
+    public static void updateApplication(int id, String status, String reason) {
         if (!ENABLED) return;
         execute("UPDATE rental_applications SET status = ?, reason = ? WHERE id = ?", statement -> {
-            statement.setString(1, application.status);
-            statement.setString(2, application.reason);
-            statement.setInt(3, application.id);
+            statement.setString(1, status);
+            statement.setString(2, reason);
+            statement.setInt(3, id);
         });
     }
 
@@ -147,13 +147,20 @@ public final class Database {
         if (!ENABLED) return;
         try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
                 "INSERT INTO room_managers (id, room_id, manager_name) VALUES (?, ?, ?)")) {
-            for (RoomManager manager : managers) {
-                statement.setInt(1, manager.id);
-                statement.setInt(2, manager.roomId);
-                statement.setString(3, manager.name);
-                statement.addBatch();
+            connection.setAutoCommit(false);
+            try {
+                for (RoomManager manager : managers) {
+                    statement.setInt(1, manager.id);
+                    statement.setInt(2, manager.roomId);
+                    statement.setString(3, manager.name);
+                    statement.addBatch();
+                }
+                statement.executeBatch();
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
             }
-            statement.executeBatch();
         } catch (SQLException e) {
             throw databaseError(e);
         }
@@ -164,6 +171,15 @@ public final class Database {
         execute("DELETE FROM room_managers WHERE room_id = ? AND id = ?", statement -> {
             statement.setInt(1, roomId);
             statement.setInt(2, managerId);
+        });
+    }
+
+    public static void deleteRoomManagers(String managerName, List<RoomManager> assignments) {
+        if (!ENABLED) return;
+        Integer[] ids = assignments.stream().map(assignment -> assignment.id).toArray(Integer[]::new);
+        execute("DELETE FROM room_managers WHERE manager_name = ? AND id = ANY (?)", statement -> {
+            statement.setString(1, managerName);
+            statement.setArray(2, statement.getConnection().createArrayOf("integer", ids));
         });
     }
 

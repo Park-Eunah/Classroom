@@ -46,11 +46,52 @@ public final class AdminView {
                 for (String name : availableNames) html.append("<option value='" + ClassroomRentalApp.esc(name) + "'>" + ClassroomRentalApp.esc(name) + "</option>");
                 html.append("</select></div></div><input type='hidden' name='selectionCount' id='selectionCount' value='1'>")
                         .append("<button type='button' class='light add-select' id='addManagerSelect'>선택 칸 추가</button><button>선택한 관리자 추가</button></form>")
-                        .append("<script>let managerSelectCount=1;const managerOptions=" + availableNames.stream().map(name -> "'" + ClassroomRentalApp.js(name) + "'").collect(java.util.stream.Collectors.joining(",", "[", "]")) + ";")
-                        .append("const rows=document.getElementById('managerSelectRows'),addSelect=document.getElementById('addManagerSelect');")
-                        .append("function refreshManagerOptions(){const selects=[...rows.querySelectorAll('select')];const chosen=selects.map(s=>s.value).filter(Boolean);selects.forEach(current=>[...current.options].forEach(option=>{if(option.value)option.disabled=chosen.includes(option.value)&&current.value!==option.value}));addSelect.disabled=managerSelectCount>=managerOptions.length||managerSelectCount>=" + availableNames.size() + ";document.getElementById('selectionCount').value=managerSelectCount}")
-                        .append("addSelect.onclick=()=>{if(managerSelectCount>=managerOptions.length||managerSelectCount>=" + availableNames.size() + ")return;managerSelectCount++;const wrapper=document.createElement('div');wrapper.className='manager-select-row';const label=document.createElement('label');label.htmlFor='managerName'+managerSelectCount;label.textContent='관리자 선택';const select=document.createElement('select');select.id='managerName'+managerSelectCount;select.name=select.id;select.required=true;const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='선택하세요';select.appendChild(placeholder);managerOptions.forEach(name=>{const option=document.createElement('option');option.value=name;option.textContent=name;select.appendChild(option)});select.onchange=refreshManagerOptions;wrapper.append(label,select);rows.appendChild(wrapper);refreshManagerOptions()};")
-                        .append("rows.querySelectorAll('select').forEach(s=>s.onchange=refreshManagerOptions);refreshManagerOptions();</script>");
+                        .append("""
+                                <script>
+                                const rows = document.getElementById('managerSelectRows');
+                                const addSelect = document.getElementById('addManagerSelect');
+                                const selectionCount = document.getElementById('selectionCount');
+                                const firstRow = rows.firstElementChild;
+                                const maxSelections = firstRow.querySelector('select').options.length - 1;
+
+                                function refreshManagerOptions() {
+                                    const selects = [...rows.querySelectorAll('select')];
+                                    const chosen = selects.map(select => select.value);
+                                    selects.forEach((select, index) => {
+                                        select.id = select.name = 'managerName' + (index + 1);
+                                        select.previousElementSibling.htmlFor = select.id;
+                                        for (const option of select.options) {
+                                            option.disabled = option.value !== '' && option.value !== select.value && chosen.includes(option.value);
+                                        }
+                                    });
+                                    addSelect.disabled = selects.length >= maxSelections;
+                                    selectionCount.value = selects.length;
+                                }
+
+                                addSelect.onclick = () => {
+                                    if (addSelect.disabled) return;
+                                    const row = firstRow.cloneNode(true);
+                                    const select = row.querySelector('select');
+                                    select.value = '';
+                                    const remove = document.createElement('button');
+                                    remove.type = 'button';
+                                    remove.className = 'reject remove-select';
+                                    remove.textContent = '삭제';
+                                    remove.setAttribute('aria-label', '추가한 관리자 선택 칸 삭제');
+                                    remove.onclick = () => {
+                                        row.remove();
+                                        refreshManagerOptions();
+                                        addSelect.focus();
+                                    };
+                                    row.append(remove);
+                                    rows.append(row);
+                                    refreshManagerOptions();
+                                    select.focus();
+                                };
+                                rows.addEventListener('change', refreshManagerOptions);
+                                refreshManagerOptions();
+                                </script>
+                                """);
             }
             html.append("</section>");
         }
@@ -59,26 +100,62 @@ public final class AdminView {
             long count = ClassroomRentalApp.ROOMS.stream().filter(room -> ClassroomRentalApp.ROOM_MANAGERS.getOrDefault(room.id, List.of()).stream().anyMatch(manager -> manager.name.equals(managerName))).count();
             html.append("<a class='manager-choice" + (managerName.equals(selectedManager) ? " active" : "") + "' href='/admin?view=managers&amp;manager=" + ClassroomRentalApp.js(managerName) + "'>" + ClassroomRentalApp.esc(managerName) + "<small>담당 " + count + "개</small></a>");
         }
-        html.append("</div><h3>" + ClassroomRentalApp.esc(managerForForms) + " 담당 강의실</h3><div class='manager-room-list'>");
-        List<Room> assignedToManager = ClassroomRentalApp.ROOMS.stream().filter(room -> ClassroomRentalApp.ROOM_MANAGERS.getOrDefault(room.id, List.of()).stream().anyMatch(manager -> manager.name.equals(managerForForms))).toList();
-        if (assignedToManager.isEmpty()) html.append("<p class='muted'>현재 담당 강의실이 없습니다.</p>");
-        for (Room room : assignedToManager) {
-            RoomManager assignment = ClassroomRentalApp.ROOM_MANAGERS.get(room.id).stream().filter(manager -> manager.name.equals(managerForForms)).findFirst().orElseThrow();
-            html.append("<div class='application manager-row'><div><strong>" + ClassroomRentalApp.esc(room.name) + "</strong><div class='muted'>" + ClassroomRentalApp.capacity(room) + "</div></div><form method='post' action='/admin/manager/remove'><input type='hidden' name='roomId' value='" + room.id + "'><input type='hidden' name='managerId' value='" + assignment.id + "'><input type='hidden' name='returnView' value='managers'><input type='hidden' name='managerName' value='" + ClassroomRentalApp.esc(managerForForms) + "'><button class='reject'>배정 해제</button></form></div>");
+        html.append("</div><h3>" + ClassroomRentalApp.esc(managerForForms) + " 담당 강의실</h3>");
+        StringBuilder roomChoices = new StringBuilder();
+        StringBuilder availableChoices = new StringBuilder();
+        for (Room room : ClassroomRentalApp.ROOMS) {
+            RoomManager assignment = ClassroomRentalApp.ROOM_MANAGERS.getOrDefault(room.id, List.of()).stream()
+                    .filter(manager -> manager.name.equals(managerForForms)).findFirst().orElse(null);
+            if (assignment == null) {
+                appendRoomChoice(availableChoices, room, "room-", 1);
+                continue;
+            }
+            appendRoomChoice(roomChoices, room, "assignment-", assignment.id);
         }
-        List<Room> availableRooms = ClassroomRentalApp.ROOMS.stream().filter(room -> ClassroomRentalApp.ROOM_MANAGERS.getOrDefault(room.id, List.of()).stream().noneMatch(manager -> manager.name.equals(managerForForms))).toList();
-        html.append("</div><form method='post' action='/admin/manager/add' class='manager-add manager-room-add'><h3>강의실 추가 배정</h3><input type='hidden' name='selectionCount' value='1'><input type='hidden' name='managerName1' value='" + ClassroomRentalApp.esc(managerForForms) + "'><input type='hidden' name='returnView' value='managers'><input type='hidden' name='managerName' value='" + ClassroomRentalApp.esc(managerForForms) + "'>");
-        if (availableRooms.isEmpty()) html.append("<p class='muted'>배정 가능한 강의실이 없습니다.</p>");
+        if (roomChoices.isEmpty()) {
+            html.append("<p class='muted'>현재 담당 강의실이 없습니다.</p>");
+        } else {
+            appendRoomForm(html, managerForForms, roomChoices, "remove-selected", "reject", "선택한 강의실 배정 해제");
+        }
+        html.append("<h3>강의실 추가 배정</h3>");
+        if (availableChoices.isEmpty()) html.append("<p class='muted'>배정 가능한 강의실이 없습니다.</p>");
         else {
-            html.append("<label for='managerRoomId'>강의실 선택</label><select id='managerRoomId' name='roomId' required><option value=''>선택하세요</option>");
-            for (Room room : availableRooms) html.append("<option value='" + room.id + "'>" + ClassroomRentalApp.esc(room.name) + "</option>");
-            html.append("</select><button>강의실 배정</button>");
+            appendRoomForm(html, managerForForms, availableChoices, "add-selected", "", "선택한 강의실 배정");
         }
-        html.append("</form></section></div><script>document.querySelectorAll('.tab-button').forEach(button=>button.onclick=()=>{if(button.dataset.pane==='managersPane'){location.href='/admin?view=managers&manager=" + ClassroomRentalApp.js(selectedManager) + "'}else{location.href='/admin'}});</script>");
+        html.append("""
+                </section></div><script>
+                document.querySelectorAll('.manager-room-form').forEach(form => {
+                    const button = form.querySelector('button');
+                    function updateButton() {
+                        button.disabled = !form.querySelector('input:checked');
+                    }
+                    form.addEventListener('change', updateButton);
+                    window.addEventListener('pageshow', updateButton);
+                    updateButton();
+                });
+                </script>
+                """);
+        html.append("<script>document.querySelectorAll('.tab-button').forEach(button=>button.onclick=()=>{if(button.dataset.pane==='managersPane'){location.href='/admin?view=managers&manager=" + ClassroomRentalApp.js(selectedManager) + "'}else{location.href='/admin'}});</script>");
         html.append("<section><h2>운영 현황</h2><p>전체 대여 신청: " + ClassroomRentalApp.APPLICATIONS.size() + "건</p>");
         long pending = ClassroomRentalApp.APPLICATIONS.stream().filter(a -> a.status.equals("대기")).count();
         html.append("<p>처리 대기: " + pending + "건</p></section>");
         return ClassroomRentalApp.shell("시스템 관리자", "강의실별 담당 관리자를 지정하고 관리합니다.", html.toString());
     
+    }
+
+    private static void appendRoomChoice(StringBuilder html, Room room, String namePrefix, int value) {
+        html.append("<label class='manager-room-option'><input type='checkbox' name='")
+                .append(namePrefix).append(room.id).append("' value='").append(value).append("'><span><strong>")
+                .append(ClassroomRentalApp.esc(room.name)).append("</strong><br><span class='muted'>")
+                .append(ClassroomRentalApp.capacity(room)).append("</span></span></label>");
+    }
+
+    private static void appendRoomForm(StringBuilder html, String managerName, StringBuilder choices,
+                                       String action, String buttonClass, String buttonLabel) {
+        html.append("<form class='manager-room-form' method='post' action='/admin/manager/").append(action).append("'>")
+                .append("<input type='hidden' name='returnView' value='managers'><input type='hidden' name='managerName' value='")
+                .append(ClassroomRentalApp.esc(managerName)).append("'><div class='manager-room-list'>")
+                .append(choices).append("</div><button class='").append(buttonClass).append("'>")
+                .append(buttonLabel).append("</button></form>");
     }
 }

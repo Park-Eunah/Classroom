@@ -30,8 +30,29 @@ public final class RoomManagerService {
         }
         List<RoomManager> added = new ArrayList<>();
         for (String name : selected) added.add(new RoomManager(roomId, name, ClassroomRentalApp.nextRoomManagerId + added.size()));
+        saveAssignments(added);
+    }
+
+    public static synchronized void addSelected(Map<String, String> form) {
+        String managerName = ClassroomRentalApp.required(form, "managerName");
+        if (!ClassroomRentalApp.ADMIN_OPTIONS.contains(managerName))
+            throw new IllegalArgumentException("관리자 목록에서 선택해 주세요.");
+
+        List<RoomManager> added = new ArrayList<>();
+        for (var entry : ClassroomRentalApp.ROOM_MANAGERS.entrySet()) {
+            int roomId = entry.getKey();
+            if (!"1".equals(form.get("room-" + roomId))) continue;
+            if (entry.getValue().stream().anyMatch(manager -> manager.name.equals(managerName))) continue;
+            added.add(new RoomManager(roomId, managerName, ClassroomRentalApp.nextRoomManagerId + added.size()));
+        }
+        if (!added.isEmpty()) saveAssignments(added);
+    }
+
+    private static void saveAssignments(List<RoomManager> added) {
         Database.insertRoomManagers(added);
-        managers.addAll(added);
+        for (RoomManager assignment : added) {
+            ClassroomRentalApp.ROOM_MANAGERS.get(assignment.roomId).add(assignment);
+        }
         ClassroomRentalApp.nextRoomManagerId += added.size();
     }
 
@@ -46,6 +67,27 @@ public final class RoomManagerService {
             throw new IllegalArgumentException("해당 강의실에서 관리자를 찾을 수 없습니다.");
         Database.deleteRoomManager(roomId, managerId);
         managers.remove(target);
+    }
+
+    public static synchronized void removeSelected(Map<String, String> form) {
+        String managerName = ClassroomRentalApp.required(form, "managerName");
+        if (!ClassroomRentalApp.ADMIN_OPTIONS.contains(managerName))
+            throw new IllegalArgumentException("관리자 목록에서 선택해 주세요.");
+
+        List<RoomManager> selected = new ArrayList<>();
+        for (var entry : ClassroomRentalApp.ROOM_MANAGERS.entrySet()) {
+            String assignmentId = form.get("assignment-" + entry.getKey());
+            if (assignmentId == null) continue;
+            entry.getValue().stream()
+                    .filter(manager -> manager.name.equals(managerName) && Integer.toString(manager.id).equals(assignmentId))
+                    .findFirst().ifPresent(selected::add);
+        }
+        if (selected.isEmpty()) return;
+
+        Database.deleteRoomManagers(managerName, selected);
+        for (RoomManager assignment : selected) {
+            ClassroomRentalApp.ROOM_MANAGERS.get(assignment.roomId).remove(assignment);
+        }
     }
 
     private static int roomId(Map<String, String> form) {

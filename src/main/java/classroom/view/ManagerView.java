@@ -1,12 +1,48 @@
 package classroom.view;
 import classroom.app.ClassroomRentalApp;
 import classroom.model.*;
-import classroom.data.RoomCatalog;
+import classroom.service.RentalService;
 import java.time.LocalDate;
 import java.util.*;
 
+import static classroom.app.ClassroomRentalApp.esc;
+
 public final class ManagerView {
     private ManagerView() { }
+
+    public static String renderApplicationDetail(int id, String managerName) {
+        Application application = RentalService.findScheduledApplication(id);
+        if (application == null || ClassroomRentalApp.ROOM_MANAGERS
+                .getOrDefault(application.roomId, List.of()).stream()
+                .noneMatch(manager -> manager.name.equals(managerName))) return null;
+
+        String status = application.status;
+        if (!status.equals("대기") && !status.equals("승인")) return null;
+        StringBuilder html = new StringBuilder("<div class='detail-card'>");
+        appendDetail(html, "대여자 이름", application.name);
+        appendDetail(html, "학번", application.studentId);
+        appendDetail(html, "강의실", application.roomName);
+        appendDetail(html, "이용 날짜", application.date);
+        appendDetail(html, "이용 시간", application.start + " ~ " + application.end);
+        appendDetail(html, "이용 목적", application.purpose);
+        appendDetail(html, "추가 정보", application.details);
+        appendDetail(html, "상태", status);
+        html.append("</div>");
+        if (status.equals("대기")) {
+            html.append("<div class='detail-actions'><form method='post' action='/decision/").append(id).append("'>")
+                    .append("<button name='choice' value='승인'>승인</button>")
+                    .append("<label for='eventRejectReason'>반려 사유</label>")
+                    .append("<input id='eventRejectReason' name='reason' placeholder='반려 사유를 입력하세요'>")
+                    .append("<button class='reject' name='choice' value='반려'>반려</button></form></div>");
+        }
+        return html.toString();
+    }
+
+    private static void appendDetail(StringBuilder html, String label, String value) {
+        html.append("<div class='detail-row'><strong>").append(label)
+                .append("</strong><div>").append(esc(value)).append("</div></div>");
+    }
+
     public static String render(String managerName) {
 
         StringBuilder roomOptions = new StringBuilder();
@@ -44,12 +80,12 @@ public final class ManagerView {
         StringBuilder eventData = new StringBuilder("[");
         for (Application a : ClassroomRentalApp.APPLICATIONS) {
             if (assignedRooms.stream().noneMatch(room -> room.id == a.roomId)) continue;
-            if (a.status.equals("반려")) continue;
+            if (!a.blocksTimeSlot()) continue;
             if (eventData.length() > 1) eventData.append(',');
             eventData.append("{id:").append(a.id).append(",roomId:").append(a.roomId).append(",date:'").append(a.date).append("',start:'").append(a.start)
-                    .append("',end:'").append(a.end).append("',status:'").append(ClassroomRentalApp.js(a.status)).append("',name:'").append(ClassroomRentalApp.js(a.name)).append("',studentId:'").append(ClassroomRentalApp.js(a.studentId))
-                    .append("',purpose:'").append(ClassroomRentalApp.js(a.purpose)).append("',details:'").append(ClassroomRentalApp.js(a.details)).append("',reason:'")
-                    .append(ClassroomRentalApp.js(a.reason)).append("'}");
+                    .append("',end:'").append(a.end).append("',status:'").append(ClassroomRentalApp.js(a.status))
+                    .append("',name:'").append(ClassroomRentalApp.js(a.name))
+                    .append("',purpose:'").append(ClassroomRentalApp.js(a.purpose)).append("'}");
         }
         eventData.append(']');
         String content = "<nav class='tabs'><button type='button' class='tab-button active' data-pane='roomsPane'>강의실 목록</button><button type='button' class='tab-button' data-pane='reviewPane'>대여 신청 검토</button></nav>"
@@ -79,16 +115,33 @@ public final class ManagerView {
                     }body.appendChild(tr);
                   }
                 }
-                function showEvent(event){
+                let detailRequest;
+                async function showEvent(event){
                   document.querySelectorAll('.week-table td.event-selected').forEach(c=>c.classList.remove('event-selected'));
                   document.querySelectorAll(`.week-table td[data-event-id="${event.id}"]`).forEach(c=>c.classList.add('event-selected'));
-                  const panel=document.getElementById('eventDetail');panel.hidden=false;panel.innerHTML='<h2>대여 신청 상세</h2><div class="detail-card" id="eventInfo"></div><div id="eventActions" class="detail-actions"></div>';
-                  const info=document.getElementById('eventInfo');const rows=[['대여자 이름',event.name],['학번',event.studentId],['강의실',currentRoom.name],['이용 날짜',event.date],['이용 시간',event.start+' ~ '+event.end],['이용 목적',event.purpose],['추가 정보',event.details],['상태',event.status]];
-                  if(event.reason)rows.push(['반려 사유',event.reason]);
-                  rows.forEach(([label,value])=>{const row=document.createElement('div');row.className='detail-row';const title=document.createElement('strong');title.textContent=label;const text=document.createElement('div');text.textContent=value;row.append(title,text);info.appendChild(row)});
-                  const actions=document.getElementById('eventActions');
-                  if(event.status==='대기'){const form=document.createElement('form');form.method='post';form.action='/decision/'+event.id;const approve=document.createElement('button');approve.name='choice';approve.value='승인';approve.textContent='승인';const label=document.createElement('label');label.textContent='반려 사유';const reason=document.createElement('input');reason.name='reason';reason.placeholder='반려 사유를 입력하세요';const reject=document.createElement('button');reject.className='reject';reject.name='choice';reject.value='반려';reject.textContent='반려';form.append(approve,label,reason,reject);actions.appendChild(form)}
+                  detailRequest?.abort();
+                  const request=new AbortController();
+                  detailRequest=request;
+                  const panel=document.getElementById('eventDetail');
+                  panel.hidden=false;
+                  panel.innerHTML='<h2>대여 신청 상세</h2><div aria-live="polite"><p class="muted">신청 정보를 불러오는 중입니다.</p></div>';
+                  const detail=panel.lastElementChild;
                   panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+                  const timeout=setTimeout(()=>request.abort(),10000);
+                  try{
+                    const response=await fetch('/manager/application/'+event.id,{signal:request.signal});
+                    if(!response.ok)throw new Error('Application detail unavailable');
+                    const fragment=document.createElement('template');
+                    fragment.innerHTML=await response.text();
+                    if(!fragment.content.firstElementChild?.matches('.detail-card'))throw new Error('Invalid application detail');
+                    if(detailRequest===request&&!panel.hidden)detail.replaceChildren(fragment.content);
+                  }catch{
+                    if(detailRequest===request&&!panel.hidden){
+                      detail.innerHTML='<p class="reason">신청 정보를 확인할 수 없습니다.</p>';
+                    }
+                  }finally{
+                    clearTimeout(timeout);
+                  }
                 }
                 document.querySelectorAll('.tab-button').forEach(button=>button.onclick=()=>{document.querySelectorAll('.tab-button').forEach(b=>b.classList.toggle('active',b===button));document.querySelectorAll('.tab-pane').forEach(p=>p.hidden=p.id!==button.dataset.pane)});
                 document.querySelectorAll('.room-option').forEach(button=>button.onclick=()=>{currentRoom=rooms.find(r=>r.id===Number(button.dataset.room));document.querySelectorAll('.room-option').forEach(b=>b.classList.toggle('active',b===button));document.getElementById('scheduleSection').hidden=false;document.getElementById('eventDetail').hidden=true;drawWeek()});

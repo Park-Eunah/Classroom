@@ -48,14 +48,31 @@ public class ClassroomRentalApp {
                 Map<String, String> form = parseForm(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 if (path.equals("/login")) { AuthService.login(exchange, form); return; }
                 if (path.equals("/logout")) { AuthService.logout(exchange); return; }
-                if ("/apply".equals(path) && "student".equals(AuthService.role(exchange))) { apply(form); redirect(exchange, "/student"); }
+                if ("/apply".equals(path) && "student".equals(AuthService.role(exchange))) {
+                    apply(exchange, form);
+                } else if ("/cancel".equals(path) && "student".equals(AuthService.role(exchange))) {
+                    boolean cancelled = RentalService.cancel(Integer.parseInt(required(form, "id")));
+                    redirect(exchange, "/student?cancelled=" + (cancelled ? "1" : "0"));
+                }
                 else if (path.startsWith("/decision/") && "manager".equals(AuthService.role(exchange))) { RentalService.decide(path, form, AuthService.username(exchange)); redirect(exchange, "/manager"); }
                 else if (path.equals("/admin/manager/add") && "admin".equals(AuthService.role(exchange))) { addRoomManager(form); redirect(exchange, adminManagerRedirect(form)); }
+                else if (path.equals("/admin/manager/add-selected") && "admin".equals(AuthService.role(exchange))) {
+                    RoomManagerService.addSelected(form);
+                    redirect(exchange, adminManagerRedirect(form));
+                }
                 else if (path.equals("/admin/manager/remove") && "admin".equals(AuthService.role(exchange))) { removeRoomManager(form); redirect(exchange, adminManagerRedirect(form)); }
+                else if (path.equals("/admin/manager/remove-selected") && "admin".equals(AuthService.role(exchange))) {
+                    RoomManagerService.removeSelected(form);
+                    redirect(exchange, adminManagerRedirect(form));
+                }
                 else redirect(exchange, "/");
                 return;
             }
             if (path.equals("/logout")) { AuthService.logout(exchange); return; }
+            if ("GET".equals(exchange.getRequestMethod()) && path.startsWith("/manager/application/")) {
+                sendManagerApplication(exchange, path.substring("/manager/application/".length()));
+                return;
+            }
             send(exchange, page(path, exchange.getRequestURI().getRawQuery(), AuthService.role(exchange), AuthService.username(exchange)));
         } catch (IllegalArgumentException e) {
             String message = e.getMessage() == null ? "입력한 정보를 확인하고 다시 시도해 주세요." : e.getMessage();
@@ -63,10 +80,45 @@ public class ClassroomRentalApp {
         }
     }
 
-    private static void apply(Map<String, String> form) { RentalService.apply(form); }
+    private static void sendManagerApplication(HttpExchange exchange, String applicationId) throws IOException {
+        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        String detail = null;
+        if ("manager".equals(AuthService.role(exchange))) {
+            try {
+                detail = ManagerView.renderApplicationDetail(Integer.parseInt(applicationId), AuthService.username(exchange));
+            } catch (NumberFormatException ignored) {
+                // An invalid ID uses the same response as an unavailable application.
+            }
+        }
+        if (detail == null) {
+            exchange.sendResponseHeaders(404, -1);
+            exchange.close();
+            return;
+        }
+        sendHtml(exchange, 200, detail);
+    }
+
+    private static void apply(HttpExchange exchange, Map<String, String> form) throws IOException {
+        try {
+            RentalService.apply(form);
+        } catch (IllegalArgumentException e) {
+            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+            send(exchange, 422, StudentView.renderFailedApplication(form, e.getMessage()));
+            return;
+        } catch (IllegalStateException e) {
+            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+            send(exchange, 503, StudentView.renderFailedApplication(form, "신청을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요."));
+            return;
+        }
+        redirect(exchange, "/student?submitted=1");
+    }
     private static String page(String path, String query, String role, String username) {
         if (path.equals("/login")) return loginPage();
-        if (path.equals("/student")) return "student".equals(role) ? studentPage() : loginPage();
+        if (path.equals("/student")) {
+            if (!"student".equals(role)) return loginPage();
+            Map<String, String> params = query == null ? Map.of() : parseForm(query);
+            return StudentView.render(params);
+        }
         if (path.equals("/manager")) return "manager".equals(role) ? ManagerView.render(username) : loginPage();
         if (path.equals("/admin")) return "admin".equals(role) ? adminPage(query) : loginPage();
         return loginPage();
@@ -74,8 +126,9 @@ public class ClassroomRentalApp {
 
     public static String shell(String title, String subtitle, String content) {
         boolean showNavigation = !"로그인".equals(title);
+        String homePath = "학생 화면".equals(title) ? "/student" : "/";
         String navigation = showNavigation
-                ? "<a class='back' href='/'>← 메인 화면</a> <a class='back' style='float:right' href='/logout'>로그아웃</a>"
+                ? "<a class='back' href='" + homePath + "'>← 메인 화면</a> <a class='back' style='float:right' href='/logout'>로그아웃</a>"
                 : "";
         return """
                 <!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -89,7 +142,6 @@ public class ClassroomRentalApp {
 
     private static String loginPage() { return LoginView.render(); }
 
-    private static String studentPage() { return StudentView.render(); }
     private static String applicationsList(boolean allowDecision) { return ApplicationView.list(allowDecision); }
     private static String adminPage(String query) { return AdminView.render(query); }
     private static void addRoomManager(Map<String, String> form) { RoomManagerService.add(form); }
@@ -102,7 +154,7 @@ public class ClassroomRentalApp {
     private static Map<Integer, List<RoomManager>> createRoomManagerMap() {
         Map<Integer, List<RoomManager>> map = new LinkedHashMap<>();
         for (Room room : ROOMS) {
-            map.put(room.id, new ArrayList<>(List.of(new RoomManager(room.id, "관리자1"))));
+            map.put(room.id, new ArrayList<>(List.of(new RoomManager(room.id, "관리자1", room.id))));
         }
         return map;
     }
@@ -132,10 +184,16 @@ public class ClassroomRentalApp {
         return RoomCatalog.hasCourseConflict(room, date, start, end);
     }
     public static void send(HttpExchange e, String body) throws IOException {
+        send(e, 200, body);
+    }
+    private static void send(HttpExchange e, int status, String body) throws IOException {
         String document = body.startsWith("<!doctype html>") ? body
                 : "<!doctype html><html lang='ko'><meta charset='utf-8'><body>" + body + "</body></html>";
-        byte[] bytes = document.getBytes(StandardCharsets.UTF_8);
-        e.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8"); e.sendResponseHeaders(200, bytes.length); e.getResponseBody().write(bytes); e.close();
+        sendHtml(e, status, document);
+    }
+    private static void sendHtml(HttpExchange e, int status, String html) throws IOException {
+        byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+        e.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8"); e.sendResponseHeaders(status, bytes.length); e.getResponseBody().write(bytes); e.close();
     }
     private static void sendCss(HttpExchange e) throws IOException {
         try (var css = ClassroomRentalApp.class.getResourceAsStream("/static/styles.css")) {
